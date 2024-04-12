@@ -13,6 +13,18 @@ var rootCmd = &cobra.Command{Use: "higgsfield"}
 
 var experimentCmd = &cobra.Command{Use: "experiment", Short: "Experiment commands"}
 
+func restartCmdFunc() *cobra.Command {
+  cmd := &cobra.Command{
+    Use : "restart",
+    Short : "Restart failed experiments",
+    Run : func(cmd *cobra.Command, args []string) {
+  
+    },
+  }
+
+  return cmd
+}
+
 func runCmdFunc() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run",

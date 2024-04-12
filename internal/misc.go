@@ -5,8 +5,8 @@ import (
 	"io"
 	"net"
 	"net/http"
-
 	"os"
+	"strings"
 
 	envparse "github.com/hashicorp/go-envparse"
 	"github.com/pkg/errors"
@@ -23,20 +23,20 @@ func PtrTo[T any](e T) *T {
 }
 
 func loadEnvFile(path string) ([]string, error) {
-  // check if the file exists
-  // if it does not exist, return an empty slice
-  if _, err := os.Stat(path); os.IsNotExist(err) {
-    return []string{}, nil
-  }
+	// check if the file exists
+	// if it does not exist, return an empty slice
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return []string{}, nil
+	}
 
-  // open file
-  file, err := os.Open(path)
-  if err != nil {
-    return nil, errors.WithMessage(err, "failed to open env file")
-  }
+	// open file
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, errors.WithMessage(err, "failed to open env file")
+	}
 
-  defer file.Close()
-  
+	defer file.Close()
+
 	envs, err := envparse.Parse(file)
 	if err != nil {
 		return nil, errors.WithMessage(err, "failed to parse env file")
@@ -84,18 +84,18 @@ func localIPs() ([]string, error) {
 	return ips, nil
 }
 
-func rankAndMasterElseExit(hosts []string) (string, int) {
+var ErrOmitHost = errors.New("ip not found in hosts list")
+
+func masterAndRank(hosts []string) (string, int, error) {
 	ip, err := myPublicIP()
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return "", 0, errors.WithMessage(err, "failed to get public IP")
 	}
 	ips := []string{ip}
 
 	localIPs, err := localIPs()
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return "", 0, errors.WithMessage(err, "failed to get local IPs")
 	}
 
 	ips = append(ips, localIPs...)
@@ -109,21 +109,36 @@ func rankAndMasterElseExit(hosts []string) (string, int) {
 	}
 
 	if len(hosts) == 1 && master == "localhost" {
-		return master, 1
+		return master, 1, nil
 	}
 
 	if rank == -1 {
-		fmt.Printf("%s not found in hosts list, omitting\n", ip)
-		os.Exit(0)
+		return "", 0, ErrOmitHost
 	}
 
-	return master, rank
+	return master, rank, nil
+}
+
+func masterAndRankElseExit(hosts []string) (string, int) {
+	ip, rank, err := masterAndRank(hosts)
+	if err != nil {
+		if errors.Is(err, ErrOmitHost) {
+			fmt.Printf("%s not found in hosts list, omitting\n", ip)
+			os.Exit(0)
+		}
+
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	return ip, rank
 }
 
 func portIsAvailable(port int) {
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		fmt.Printf("port %d is already in use\n", port)
+		fmt.Println(err)
 		os.Exit(1)
 	}
 
@@ -172,8 +187,6 @@ func makeDefaultDirectories(projectName, experimentName, runName string) (string
 
 	return cacheDir.path, checkpointDir.path, nil
 }
-
-type errStrategyFunc func(flag string, err error)
 
 func exitIfError(flag string, err error) {
 	if err != nil {
@@ -225,4 +238,91 @@ func parseOrExitInternal[T ~string | ~int | ~[]string](cmd *cobra.Command, flag 
 	}
 
 	return nil, false
+}
+
+const trainInfoFormat = `
+╔══════════════════════════════════════════════════════════════════════════════════════════════════════
+║  
+║  > Training info:
+║  > 🛠🛠🛠
+║    
+║  > EXPERIMENT NAME  = %s 
+║  > RUN NAME         = %s
+║  > CONTAINER NAME   = %s
+║  > MODEL CHKPT PATH = %s
+║
+╚══════════════════════════════════════════════════════════════════════════════════════════════════════
+`
+
+func trimPathForLength(path string, length int) string {
+	// check if path is less than length
+	if len(path) < length {
+		return path
+	}
+
+	// get rid of home directory and replace is with ~
+	// e.g. /home/user/... -> ~/...
+	if path[0] == '/' {
+		path = path[1:]
+	}
+
+	branches := strings.Split(path, "/")
+	slashes := len(branches) - 1
+	if slashes == 0 {
+		return path[:length]
+	}
+
+	if branches[0] == "home" {
+		path = "~/" + strings.Join(branches[2:], "/")
+	}
+
+	if len(path) < length {
+		return path
+	}
+
+	return path[:length] + "..."
+}
+
+func MapJoin[T comparable, V any](maps ...map[T]V) map[T]V {
+	newMap := make(map[T]V)
+	for _, m := range maps {
+		for k, v := range m {
+			newMap[k] = v
+		}
+	}
+
+	return newMap
+}
+
+func ValueOf[T any](ptr *T) T {
+	return *ptr
+}
+
+func FirstOfMap[T comparable, V any](m map[T]V) (T, V, bool) {
+	for k, v := range m {
+		return k, v, true
+	}
+	return ValueOf(new(T)), ValueOf(new(V)), false
+}
+
+func FirstKey[T comparable, V any](m map[T]V) (T, bool) {
+	for k := range m {
+		return k, true
+	}
+	return ValueOf(new(T)), false
+}
+
+func FirstValue[T comparable, V any](m map[T]V) (V, bool) {
+	for _, v := range m {
+		return v, true
+	}
+	return ValueOf(new(V)), false
+}
+
+func Keys[T comparable, V any](m map[T]V) []T {
+	keys := make([]T, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

@@ -25,7 +25,7 @@ func Kill(args KillArgs) {
 		panic(err)
 	}
 
-	rankAndMasterElseExit(args.Hosts)
+	masterAndRankElseExit(args.Hosts)
 
 	// get home directory
 	home, err := os.UserHomeDir()
