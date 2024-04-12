@@ -288,7 +288,7 @@ func (d *DockerRun) LoadLogs(
 	}
 
 	if cfg.Type == "awslogs" {
-		SetAWSStreamPrefix(cfg, rank)
+		// SetAWSStreamPrefix(cfg, rank)
 	}
 
 	return cfg, nil
