@@ -154,7 +154,7 @@ func Run(args RunArgs) {
 	f.Write([]byte(runScript))
 
 	dr := NewDockerRun(context.Background(), args.ProjectName, cwd, hostCachePath)
-	if err := dr.Run(containerName, cmd, cmdArgs, args.Port); err != nil {
+	if err := dr.Run(containerName, cmd, cmdArgs, args.Port, rank); err != nil {
 		fmt.Printf("error occured while running experiment: %+v\n", err)
 		os.Exit(1)
 	}

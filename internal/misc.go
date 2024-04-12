@@ -22,32 +22,47 @@ func PtrTo[T any](e T) *T {
 	return &e
 }
 
-func loadEnvFile(path string) ([]string, error) {
-  // check if the file exists
-  // if it does not exist, return an empty slice
-  if _, err := os.Stat(path); os.IsNotExist(err) {
-    return []string{}, nil
-  }
+func loadEnvMap(path string) (map[string]string, error) {
+	// check if the file exists
+	// if it does not exist, return an empty slice
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil, nil
+	}
 
-  // open file
-  file, err := os.Open(path)
-  if err != nil {
-    return nil, errors.WithMessage(err, "failed to open env file")
-  }
+	// open file
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, errors.WithMessage(err, "failed to open env file")
+	}
 
-  defer file.Close()
-  
+	defer file.Close()
+
 	envs, err := envparse.Parse(file)
 	if err != nil {
 		return nil, errors.WithMessage(err, "failed to parse env file")
 	}
 
-	var lines []string
-	for key, value := range envs {
-		lines = append(lines, key+"="+value)
-	}
+	return envs, nil
+}
 
-	return lines, nil
+
+// the latter map will override the former
+func joinMaps[T comparable, V any](maps ...map[T]V) map[T]V {
+  joined := make(map[T]V)
+  for _, m := range maps {
+    for k, v := range m {
+      joined[k] = v
+    }
+  }
+  return joined
+}
+
+func joinEnvMap2Slice(m map[string]string) []string {
+  var envs []string
+  for key, value := range m {
+    envs = append(envs, key+"="+value)
+  }
+  return envs
 }
 
 func myPublicIP() (string, error) {

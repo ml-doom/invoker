@@ -274,11 +274,73 @@ func (d *DockerRun) build() error {
 	return nil
 }
 
+func (d *DockerRun) LoadLogs(
+	path string,
+	rank int,
+) (*container.LogConfig, error) {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil, nil
+	}
+
+	cfg, err := ParseLogConfig(path)
+	if err != nil {
+		return nil, errors.WithMessagef(err, "failed to load log config from %s", path)
+	}
+
+	if cfg.Type == "awslogs" {
+		SetAWSStreamPrefix(cfg, rank)
+	}
+
+	return cfg, nil
+}
+
+func (d *DockerRun) HostConfigBuilder(
+	logCfgPath string, rank int,
+) (*HostCfgBuilder, error) {
+	dm, dr := d.deviceMapsAndRequests()
+
+	hcfgBuilder := NewHostCfgBuilder().AttachBindsToHostConfig(d.volbinds()).
+		AttachPrivilegedToHostConfig(true).
+		AttachIPCModeToHostConfig(container.IPCModeHost).
+		AttachPidModeToHostConfig(container.PidMode("host")).
+		AttachNetworkModeToHostConfig(container.NetworkMode("host")).
+		AttachCapAddToHostConfig(capAdd()).
+		AttachResourcesToHostConfig(container.Resources{
+			DeviceRequests: dr,
+			Ulimits: []*units.Ulimit{
+				{
+					Name: "memlock",
+					Soft: -1,
+					Hard: -1,
+				},
+				{
+					Name: "stack",
+					Soft: 67108864,
+					Hard: 67108864,
+				},
+			},
+			Devices: dm,
+		}).
+		AttachPrivilegedToHostConfig(true)
+
+	logCfg, err := d.LoadLogs(filepath.Join(d.hostRootPath, logCfgPath), rank)
+	if err != nil {
+		return nil, errors.WithMessagef(err, "failed to load log config")
+	}
+
+	if logCfg != nil {
+		hcfgBuilder.AttachLogConfigToHostConfig(*logCfg)
+	}
+
+	return hcfgBuilder, nil
+}
+
 func (d *DockerRun) Run(
 	containerName string,
 	runCommand string,
 	runCommandArgs []string,
 	exposePort int,
+	rank int,
 ) error {
 	fmt.Printf("killing container %s\n", containerName)
 	if err := d.Kill(containerName); err != nil {
@@ -289,11 +351,18 @@ func (d *DockerRun) Run(
 		return errors.WithMessagef(err, "failed to build image %s", d.imageTag)
 	}
 
-	dm, dr := d.deviceMapsAndRequests()
-	envVars, err := loadEnvFile(filepath.Join(d.hostRootPath, "nccl_config_env"))
+	ncclConfigEnvMap, err := loadEnvMap(filepath.Join(d.hostRootPath, "nccl_config_env"))
 	if err != nil {
 		return errors.WithMessagef(err, "failed to load nccl_config_env file")
 	}
+
+	defEnvMap, _ := loadEnvMap(filepath.Join(d.hostRootPath, "env"))
+	envVars := joinEnvMap2Slice(joinMaps(ncclConfigEnvMap, defEnvMap))
+  
+  hcfgBuilder, err := d.HostConfigBuilder("log_cfg", rank)
+  if err != nil {
+    return errors.WithMessagef(err, "failed to build host config")
+  }
 
 	fmt.Printf("creating container %s\n", containerName)
 	createOptions := types.ContainerCreateConfig{
@@ -303,30 +372,7 @@ func (d *DockerRun) Run(
 			Entrypoint: append([]string{runCommand}, runCommandArgs...),
 			Env:        envVars,
 		},
-		HostConfig: &container.HostConfig{
-			Binds:       d.volbinds(),
-			IpcMode:     container.IPCModeHost,
-			PidMode:     container.PidMode("host"),
-			NetworkMode: container.NetworkMode("host"),
-			CapAdd:      capAdd(),
-			Resources: container.Resources{
-				DeviceRequests: dr,
-				Ulimits: []*units.Ulimit{
-					{
-						Name: "memlock",
-						Soft: -1,
-						Hard: -1,
-					},
-					{
-						Name: "stack",
-						Soft: 67108864,
-						Hard: 67108864,
-					},
-				},
-				Devices: dm,
-			},
-			Privileged: true,
-		},
+		HostConfig: hcfgBuilder.Build(),
 	}
 
 	resp, err := d.client.ContainerCreate(d.ctx, createOptions.Config, createOptions.HostConfig, nil, nil, containerName)
